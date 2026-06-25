@@ -1,0 +1,26 @@
+const { PHASES } = require('./phases');
+
+const transitions = Object.freeze({
+  [PHASES.STARTED]:           [PHASES.OPEN_PORTAL, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.IDENTITY]:          [PHASES.CAPTCHA_REQUIRED, PHASES.OTP_REQUIRED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.OPEN_PORTAL]:       [PHASES.IDENTITY, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.CAPTCHA_REQUIRED]:  [PHASES.CAPTCHA_SOLVED, PHASES.OTP_REQUIRED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.CAPTCHA_SOLVED]:    [PHASES.OTP_REQUIRED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.OTP_REQUIRED]:      [PHASES.WAITING_FOR_OTP,  PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.WAITING_FOR_OTP]:   [PHASES.OTP_VERIFIED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.OTP_VERIFIED]:      [PHASES.PASSWORD_GENERATED, PHASES.WAITING_FOR_OTP, PHASES.OTP_REQUIRED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.PASSWORD_GENERATED]:[PHASES.COMPLETED, PHASES.FAILED, PHASES.CANCELLED],
+  [PHASES.COMPLETED]:         [],
+  [PHASES.FAILED]:            [],
+  [PHASES.CANCELLED]:         [],
+});
+
+function assertTransition(from, to) {
+  if (from === to) return; // same-phase re-emit allowed
+  const allowed = transitions[from] || [];
+  if (!allowed.includes(to)) {
+    throw new Error(`Invalid state transition ${from} -> ${to}`);
+  }
+}
+
+module.exports = { transitions, assertTransition };

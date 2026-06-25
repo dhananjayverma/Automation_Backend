@@ -1,0 +1,29 @@
+const PHASES = Object.freeze({
+  STARTED: "STARTED",
+  OPEN_PORTAL: "OPEN_PORTAL",
+  IDENTITY: "IDENTITY",
+  CAPTCHA_REQUIRED: "CAPTCHA_REQUIRED",
+  CAPTCHA_SOLVED: "CAPTCHA_SOLVED",
+  OTP_REQUIRED: "OTP_REQUIRED",
+  WAITING_FOR_OTP: "WAITING_FOR_OTP",
+  OTP_VERIFIED: "OTP_VERIFIED",
+  PASSWORD_GENERATED: "PASSWORD_GENERATED",
+  COMPLETED: "COMPLETED",
+  FAILED: "FAILED",
+  CANCELLED: "CANCELLED",
+});
+
+const TERMINAL_PHASES = new Set([PHASES.COMPLETED, PHASES.FAILED, PHASES.CANCELLED]);
+
+const STATUS_BY_PHASE = Object.freeze({
+  [PHASES.COMPLETED]: "completed",
+  [PHASES.FAILED]: "failed",
+  [PHASES.CANCELLED]: "cancelled",
+  [PHASES.WAITING_FOR_OTP]: "waiting_for_operator",
+});
+
+function statusForPhase(phase) {
+  return STATUS_BY_PHASE[phase] || "running";
+}
+
+module.exports = { PHASES, TERMINAL_PHASES, statusForPhase };
