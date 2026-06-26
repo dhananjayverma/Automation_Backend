@@ -7,7 +7,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test": "node --test",
-     "postinstall": "playwright install chromium"
+    "postinstall": "npx playwright install chromium",
+    "playwright:install": "npx playwright install chromium"
   },
   "keywords": [],
   "author": "",
