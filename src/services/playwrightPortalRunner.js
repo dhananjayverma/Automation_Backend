@@ -1815,12 +1815,15 @@ async function runPlaywrightAutomation({
       }
     }
 
-    await emit(
-      jobId,
-      PHASES.OTP_REQUIRED,
-      "OTP will be sent to registered mobile/email — enter it in the dashboard when received",
-      "otp_required"
-    );
+    const otpNoticeJob = await Job.findOne({ jobId }).select("phase").lean();
+    if (!otpNoticeJob || (otpNoticeJob.phase !== PHASES.OTP_REQUIRED && otpNoticeJob.phase !== PHASES.WAITING_FOR_OTP)) {
+      await emit(
+        jobId,
+        PHASES.OTP_REQUIRED,
+        "OTP will be sent to registered mobile/email — enter it in the dashboard when received",
+        "otp_required"
+      );
+    }
 
     let operatorOtpReceived = false;
     let attempts = 0;
