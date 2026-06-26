@@ -46,18 +46,19 @@ flowchart TD
     Q --> R[waitForOtp creates resolver]
     R --> S[POST /jobs/:id/otp resolves OTP]
     S --> T[Type OTP digit by digit]
-    T --> U{Portal accepts OTP?}
+    T --> U[Click Verify and wait for password screen]
+    U --> V{Portal accepts OTP?}
 
-    U -->|Wrong OTP| V[Emit retry warning]
-    V --> Q
+    V -->|Wrong OTP| W[Emit retry warning]
+    W --> Q
 
-    U -->|Accepted| W[Detect Set New Password page]
-    W --> X[Emit OTP_VERIFIED]
-    X --> Y[Generate strong password]
-    Y --> Z[Fill password and confirm password]
-    Z --> AA[Click Submit]
-    AA --> AB[Encrypt password]
-    AB --> AC[Emit COMPLETED]
+    V -->|Accepted| X[Detect Set New Password page]
+    X --> Y[Emit OTP_VERIFIED]
+    Y --> Z[Generate strong password]
+    Z --> AA[Fill password and confirm password]
+    AA --> AB[Click Submit]
+    AB --> AC[Encrypt password]
+    AC --> AD[Emit COMPLETED]
 
     C --> AD{Operator cancels?}
     AD -->|Yes| AE[Emit CANCELLED and cleanup resolvers]
@@ -131,7 +132,7 @@ backend
 │  │  ├─ automationEngine.js
 │  │  │  Starts automation, waits for OTP, queues early OTP, cancellation
 │  │  ├─ playwrightPortalRunner.js
-│  │  │  Browser automation and portal-specific recovery handling
+│  │  │  Browser automation, OTP verify wait, and password reset handling
 │  │  ├─ eventService.js
 │  │  │  State transition validation, DB writes, SSE broadcast
 │  │  └─ sseHub.js
@@ -207,6 +208,7 @@ other phases    -> running
 - Generate Aadhaar OTP button.
 - Split OTP boxes with digit-by-digit typing.
 - Angular `input`, `change`, `keyup`, blur, and Tab validation triggers.
+- Click `Verify` and wait for the password reset screen before promoting OTP success.
 - Auto-detection when OTP moves directly to `Set New Password`.
 - Password and confirm-password fill with validation events.
 - Final password submit and completion event.
