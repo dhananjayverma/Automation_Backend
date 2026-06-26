@@ -1015,6 +1015,31 @@ async function handleAadhaarConsentAndGenerateOtp(page, otpSelectors, passwordSe
         throw Object.assign(new Error(uidaiError.message), { code: uidaiError.code });
       }
       await page.waitForTimeout(5000 * uidaiRetries);
+      console.log(`[automation:${jobId}] Retrying Generate Aadhaar OTP after UIDAI timeout`);
+
+      const consentReady = await ensureAadhaarConsentChecked(page, jobId);
+      if (!consentReady) {
+        console.log(`[automation:${jobId}] Aadhaar consent checkbox not confirmed during retry`);
+        continue;
+      }
+
+      const retryClicked = await clickGenerateAadhaarOtpButton(page, jobId);
+      if (!retryClicked) {
+        console.log(`[automation:${jobId}] Generate Aadhaar OTP click not available during retry`);
+        continue;
+      }
+
+      await waitForOtpPageAfterGenerate(page, 25000);
+      await page.waitForTimeout(1500);
+      const afterRetry = await page.locator("body").innerText().catch(() => "");
+      console.log(`[automation:${jobId}] after UIDAI retry => ${afterRetry.replace(/\s+/g, " ").trim().slice(0, 1000)}`);
+      const retryStage = await detectRecoveryStage(page, otpSelectors, passwordSelector);
+      if (retryStage === "otp" || retryStage === "password") {
+        return true;
+      }
+      if (/otp\s+has\s+been\s+sent|enter\s+(the\s+)?otp|validate\s+otp/i.test(afterRetry)) {
+        return true;
+      }
       continue;
     }
 
@@ -1054,6 +1079,31 @@ async function handleAadhaarConsentAndGenerateOtp(page, otpSelectors, passwordSe
             throw Object.assign(new Error(afterUidai.message), { code: afterUidai.code });
           }
           await page.waitForTimeout(5000 * uidaiRetries);
+          console.log(`[automation:${jobId}] Retrying Generate Aadhaar OTP after UIDAI timeout`);
+
+          const retryConsentReady = await ensureAadhaarConsentChecked(page, jobId);
+          if (!retryConsentReady) {
+            console.log(`[automation:${jobId}] Aadhaar consent checkbox not confirmed during retry`);
+            continue;
+          }
+
+          const retryClicked = await clickGenerateAadhaarOtpButton(page, jobId);
+          if (!retryClicked) {
+            console.log(`[automation:${jobId}] Generate Aadhaar OTP click not available during retry`);
+            continue;
+          }
+
+          await waitForOtpPageAfterGenerate(page, 25000);
+          await page.waitForTimeout(1500);
+          const retryBody = await page.locator("body").innerText().catch(() => "");
+          console.log(`[automation:${jobId}] after UIDAI retry => ${retryBody.replace(/\s+/g, " ").trim().slice(0, 1000)}`);
+          const retryStage = await detectRecoveryStage(page, otpSelectors, passwordSelector);
+          if (retryStage === "otp" || retryStage === "password") {
+            return true;
+          }
+          if (/otp\s+has\s+been\s+sent|enter\s+(the\s+)?otp|validate\s+otp/i.test(retryBody)) {
+            return true;
+          }
           continue;
         }
         console.log(`[automation:${jobId}] still on Aadhaar consent page after click — retrying`);
@@ -1227,6 +1277,9 @@ async function detectPortalError(page) {
     return { code: "PAN_NOT_REGISTERED", message: "PAN is not registered on the Income Tax portal" };
   }
   if (/uidai|absence of response from uidai|could not be completed in absence of response/.test(text)) {
+    if (isAadhaarOtpConsentContext(text)) {
+      return null;
+    }
     return {
       code: "UIDAI_UNAVAILABLE",
       message:
@@ -1246,6 +1299,12 @@ function detectUidaiError(text = "") {
     };
   }
   return null;
+}
+
+function isAadhaarOtpConsentContext(text = "") {
+  return /I\s+agree\s+to\s+validate\s+my\s+Aadhaar\s+Details|Generate\s+Aadhaar\s+OTP|OTP\s+on\s+mobile\s+number\s+registered\s+with\s+Aadhaar|One\s+time\s+password\s+\(OTP\)\s+will\s+be\s+sent\s+via\s+text\s+message/i.test(
+    text
+  );
 }
 
 async function hasVisibleOtpInput(page, otpSelectors) {
