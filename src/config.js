@@ -10,7 +10,10 @@ const config = {
   authToken: process.env.AUTH_TOKEN || "",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
   portalUrl: process.env.PORTAL_URL || "https://www.incometax.gov.in/iec/foportal/",
-  playwrightHeadless: process.env.PLAYWRIGHT_HEADLESS === "true",
+  playwrightHeadless:
+    process.env.NODE_ENV === "production"
+      ? true
+      : process.env.PLAYWRIGHT_HEADLESS === "true",
 };
 
 function loadEnvFile(filePath) {
