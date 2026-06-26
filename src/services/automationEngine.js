@@ -13,6 +13,28 @@ const captchaPendingByJob = new Map();
 const cancelledJobs = new Set();
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const PAN_NOT_REGISTERED_CODES = new Set([
+  "PAN_NOT_REGISTERED",
+  "LOGIN_INPUT_MISSING",
+  "LOGIN_USER_ID_NOT_ACCEPTED",
+  "LOGIN_PAGE_NOT_RECOVERY",
+]);
+
+function normalizeAutomationError(error) {
+  const code = error?.code || "AUTOMATION_ERROR";
+  if (PAN_NOT_REGISTERED_CODES.has(code)) {
+    return {
+      code: "PAN_NOT_REGISTERED",
+      message: "PAN is not registered on the Income Tax portal. Please register the PAN before using password recovery.",
+    };
+  }
+
+  return {
+    code,
+    message: error?.message || "Automation failed",
+  };
+}
+
 async function runAutomation(jobId) {
   try {
     const job = await Job.findOne({ jobId })
@@ -37,9 +59,10 @@ async function runAutomation(jobId) {
       cleanupJob(jobId);
       return;
     }
-    await emit(jobId, PHASES.FAILED, error.message || 'Automation failed', 'failed', {
+    const normalizedError = normalizeAutomationError(error);
+    await emit(jobId, PHASES.FAILED, normalizedError.message, 'failed', {
       level: 'error',
-      error: { code: error.code || 'AUTOMATION_ERROR', message: error.message },
+      error: normalizedError,
     }).catch(() => {});
     cleanupJob(jobId);
   }
@@ -51,7 +74,7 @@ async function completeWithGeneratedCredentials(jobId, password) {
   const generatedPwd = password || generatePassword();
   const userId = pan; // PAN is the User ID on the Income Tax portal
 
-  await emit(jobId, PHASES.PASSWORD_GENERATED, 'New password generated and being set on portal', 'password_generated', {
+  await emit(jobId, PHASES.PASSWORD_GENERATED, 'Password set on portal', 'password_generated', {
     metadata: { userId: maskPan(userId) },
   });
   await delay(400);
@@ -87,6 +110,25 @@ function submitOrQueueOtp(jobId, otp) {
   }
   pendingOtps.set(jobId, otp);
   return true;
+}
+
+const OTP_OPERATOR_PHASES = new Set([
+  PHASES.CAPTCHA_SOLVED,
+  PHASES.OTP_REQUIRED,
+  PHASES.WAITING_FOR_OTP,
+]);
+
+const CAPTCHA_CONTINUE_PHASES = new Set([
+  PHASES.CAPTCHA_REQUIRED,
+  PHASES.CAPTCHA_SOLVED,
+]);
+
+function canAcceptOperatorOtp(phase) {
+  return OTP_OPERATOR_PHASES.has(phase);
+}
+
+function canAcceptCaptchaContinue(phase) {
+  return CAPTCHA_CONTINUE_PHASES.has(phase);
 }
 
 function signalCaptchaContinue(jobId) {
@@ -199,4 +241,13 @@ async function postWebhookEvent(payload) {
   }
 }
 
-module.exports = { startAutomation, submitOtp, submitOrQueueOtp, signalCaptchaContinue, cancelAutomation };
+module.exports = {
+  startAutomation,
+  submitOtp,
+  submitOrQueueOtp,
+  signalCaptchaContinue,
+  cancelAutomation,
+  canAcceptOperatorOtp,
+  canAcceptCaptchaContinue,
+  normalizeAutomationError,
+};

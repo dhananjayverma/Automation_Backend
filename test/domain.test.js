@@ -4,7 +4,7 @@ const { PHASES, statusForPhase } = require("../src/domain/phases");
 const { assertTransition } = require("../src/domain/stateMachine");
 const { formatSse } = require("../src/services/sseHub");
 const { maskPan } = require("../src/utils/mask");
-const { submitOtp } = require("../src/services/automationEngine");
+const { submitOtp, normalizeAutomationError } = require("../src/services/automationEngine");
 
 test("state machine accepts the happy path and rejects skipped phases", () => {
   const happyPath = [
@@ -60,4 +60,17 @@ test("SSE formatter includes reconnect id, event name, and JSON data", () => {
 
 test("OTP cannot be submitted when no automation is waiting", () => {
   assert.equal(submitOtp("missing-job", "123456"), false);
+});
+
+test("login recovery failures normalize to PAN not registered", () => {
+  assert.deepEqual(
+    normalizeAutomationError({
+      code: "LOGIN_INPUT_MISSING",
+      message: "Login page did not show the PAN/User ID input; cannot start recovery flow",
+    }),
+    {
+      code: "PAN_NOT_REGISTERED",
+      message: "PAN is not registered on the Income Tax portal. Please register the PAN before using password recovery.",
+    }
+  );
 });

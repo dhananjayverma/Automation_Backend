@@ -12,6 +12,8 @@ async function appendEvent(jobId, payload) {
     throw error;
   }
 
+  console.log("[STATE]", job.phase, "=>", payload.phase);
+
   assertTransition(job.phase, payload.phase);
 
   const updatedAt = new Date();

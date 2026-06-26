@@ -4,10 +4,11 @@ const Job = require("../models/job");
 const Event = require("../models/event");
 const { PHASES } = require("../domain/phases");
 const { appendEvent, replayEvents } = require("../services/eventService");
-const { startAutomation, submitOrQueueOtp, signalCaptchaContinue, cancelAutomation } = require("../services/automationEngine");
+const { startAutomation, submitOrQueueOtp, signalCaptchaContinue, cancelAutomation, canAcceptOperatorOtp, canAcceptCaptchaContinue } = require("../services/automationEngine");
 const { requireBearer } = require("../middleware/auth");
 const { formatSse, sseHub } = require("../services/sseHub");
 const { maskPan } = require("../utils/mask");
+const { decrypt } = require("../utils/crypto");
 
 const router = express.Router();
 const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -149,8 +150,10 @@ router.post("/:id/continue", requireBearer, async (req, res, next) => {
     if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
-    if (job.phase !== PHASES.CAPTCHA_REQUIRED) {
-      return res.status(409).json({ error: "Run is not waiting on CAPTCHA step" });
+    if (!canAcceptCaptchaContinue(job.phase)) {
+      return res.status(409).json({
+        error: "Run is not waiting on CAPTCHA. Solve CAPTCHA in the browser when the run reaches that step.",
+      });
     }
 
     const accepted = signalCaptchaContinue(req.params.id);
@@ -182,22 +185,27 @@ router.post("/:id/otp", requireBearer, async (req, res, next) => {
     if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
-    if (job.phase !== PHASES.WAITING_FOR_OTP) {
-      return res.status(409).json({ error: "Run is not waiting for OTP" });
+    if (!canAcceptOperatorOtp(job.phase)) {
+      const hint =
+        job.phase === PHASES.CAPTCHA_REQUIRED
+          ? "Solve CAPTCHA in the browser first, then click Continue. OTP comes after that."
+          : "Run is not ready for OTP yet. Wait until the dashboard shows the OTP input.";
+      return res.status(409).json({ error: hint });
     }
-
-    await appendEvent(req.params.id, {
-      phase: PHASES.WAITING_FOR_OTP,
-      level: "info",
-      message: "Operator supplied OTP; resuming automation",
-      step: "otp_supplied",
-      metadata: { otp: "******" },
-    });
 
     const accepted = submitOrQueueOtp(req.params.id, otp);
     if (!accepted) {
-      return res.status(409).json({ error: "Automation is not waiting for OTP" });
+      return res.status(409).json({ error: "Automation is not active for this run." });
     }
+
+    const nextPhase = job.phase === PHASES.OTP_REQUIRED ? PHASES.WAITING_FOR_OTP : job.phase;
+    await appendEvent(req.params.id, {
+      phase: nextPhase,
+      level: "info",
+      message: "Operator supplied OTP; bot will fill it on the portal",
+      step: "otp_supplied",
+      metadata: { otp: "******" },
+    });
 
     res.status(202).json({ accepted: true });
   } catch (error) {
@@ -268,6 +276,9 @@ function publicJob(job) {
       userId: job.result.userId ? maskPan(job.result.userId) : undefined,
       passwordSaved: Boolean(job.result.encryptedPassword),
     };
+    if (job.phase === PHASES.COMPLETED && job.result.encryptedPassword) {
+      result.password = decrypt(job.result.encryptedPassword);
+    }
   }
 
   return {
