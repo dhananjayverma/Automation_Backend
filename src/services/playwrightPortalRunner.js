@@ -244,6 +244,8 @@ async function fillOtp(page, otp, selectors) {
     ? selectors
     : selectors.split(",").map((s) => s.trim());
 
+  await waitForOtpInputsReady(page, list, 20000);
+
   for (const sel of list) {
     const boxes = page.locator(sel);
     const count = await boxes.count().catch(() => 0);
@@ -253,33 +255,52 @@ async function fillOtp(page, otp, selectors) {
       const digitsToFill = Math.min(count, otp.length);
       for (let i = 0; i < digitsToFill; i++) {
         const box = boxes.nth(i);
-        await box.click({ timeout: 5000 });
-        await page.keyboard.press("Meta+A").catch(() => {});
-        await page.keyboard.press("Control+A").catch(() => {});
-        await page.keyboard.press("Backspace").catch(() => {});
-        await box.type(otp[i], { delay: 80 });
-        await box.evaluate((el) => {
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: el.value || "" }));
-        }).catch(() => {});
-        await page.waitForTimeout(120);
+        const digit = otp[i];
+        await box.scrollIntoViewIfNeeded().catch(() => {});
+        await box.click({ timeout: 5000 }).catch(() => {});
+        await box.evaluate((el, nextDigit) => {
+          const input = el;
+          const proto = input instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (setter) {
+            setter.call(input, nextDigit);
+          } else {
+            input.value = nextDigit;
+          }
+          input.dispatchEvent(new InputEvent("input", { bubbles: true, data: nextDigit, inputType: "insertText" }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: nextDigit }));
+          input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: nextDigit }));
+        }, digit).catch(async () => {
+          await box.fill(digit).catch(() => {});
+        });
+        await page.waitForTimeout(180);
       }
 
       await boxes.nth(digitsToFill - 1).blur().catch(() => {});
       await page.keyboard.press("Tab").catch(() => {});
     } else {
       const input = boxes.first();
-      await input.click({ clickCount: 3, timeout: 5000 });
-      await page.keyboard.press("Meta+A").catch(() => {});
-      await page.keyboard.press("Control+A").catch(() => {});
-      await page.keyboard.press("Backspace").catch(() => {});
-      await input.type(otp, { delay: 80 });
-      await input.evaluate((el) => {
-        el.dispatchEvent(new Event("input", { bubbles: true }));
+      await input.click({ clickCount: 3, timeout: 5000 }).catch(() => {});
+      await input.evaluate((el, nextValue) => {
+        const text = String(nextValue);
+        const proto = el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (setter) {
+          setter.call(el, text);
+        } else {
+          el.value = text;
+        }
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: el.value?.at(-1) || "" }));
-      }).catch(() => {});
+        el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: text.at(-1) || "" }));
+      }, otp).catch(async () => {
+        await input.fill(otp).catch(() => {});
+      });
       await input.blur().catch(() => {});
       await page.keyboard.press("Tab").catch(() => {});
     }
@@ -293,10 +314,6 @@ async function fillOtp(page, otp, selectors) {
     const bodyAfterOtp = await page.locator("body").innerText().catch(() => "");
     console.log(`[automation] OTP entered; checkbox=${checkboxChecked}; verifyDisabled=${verifyDisabled}`);
     console.log(`[automation] OTP page body after entry => ${bodyAfterOtp.replace(/\s+/g, " ").trim().slice(0, 800)}`);
-    if (isPasswordResetText(bodyAfterOtp)) {
-      console.log("[automation] OTP accepted; password reset page detected after OTP entry");
-      return;
-    }
 
     // Click the submit button after filling
     const submitSelectors = [
@@ -308,8 +325,24 @@ async function fillOtp(page, otp, selectors) {
       'button[type="submit"]',
     ];
 
+    await page
+      .waitForFunction(
+        () => {
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+          return buttons.some((button) => {
+            const text = (button.textContent || "").trim().toLowerCase();
+            const ariaDisabled = button.getAttribute?.("aria-disabled") === "true";
+            const disabled = "disabled" in button && Boolean(button.disabled);
+            return /verify|validate|submit|continue|proceed/.test(text) && !disabled && !ariaDisabled && (button.offsetParent !== null);
+          });
+        },
+        { timeout: 7000, polling: 300 }
+      )
+      .catch(() => {});
+
     const clicked = await clickEnabledButton(page, submitSelectors, 10000);
     if (clicked) {
+      console.log("[automation] OTP verify button clicked; waiting for portal transition");
       return;
     }
 
@@ -427,6 +460,17 @@ async function waitForPasswordSuccess(page, timeoutMs = 20000) {
   return false;
 }
 
+async function waitForPasswordResetPage(page, passwordSelector, otpSelectors = [], timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isPasswordResetPage(page, passwordSelector, otpSelectors)) {
+      return true;
+    }
+    await page.waitForTimeout(700);
+  }
+  return false;
+}
+
 async function clickButtonElement(button) {
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.evaluate((el) => {
@@ -483,6 +527,35 @@ async function clickEnabledButton(page, selectors, timeoutMs = 15000) {
     }
 
     await page.waitForTimeout(500);
+  }
+
+  return false;
+}
+
+async function waitForOtpInputsReady(page, selectors, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const sel of selectors.filter(Boolean)) {
+      const boxes = page.locator(sel);
+      const count = await boxes.count().catch(() => 0);
+      if (count === 0) continue;
+
+      const readyCount = await boxes.evaluateAll((elements) =>
+        elements.filter((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          const disabled = "disabled" in el ? Boolean(el.disabled) : false;
+          const readOnly = "readOnly" in el ? Boolean(el.readOnly) : false;
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && !disabled && !readOnly;
+        }).length
+      ).catch(() => 0);
+
+      if (readyCount > 0) {
+        return true;
+      }
+    }
+
+    await page.waitForTimeout(300);
   }
 
   return false;
@@ -1004,8 +1077,11 @@ async function handleAadhaarConsentAndGenerateOtp(page, otpSelectors, passwordSe
     if (uidaiError) {
       uidaiRetries += 1;
       console.log(`[automation:${jobId}] UIDAI error on portal (attempt ${uidaiRetries}/${MAX_UIDAI_RETRIES})`);
+      const currentJob = await Job.findOne({ jobId }).select("phase").lean();
+      const uidaiPhase =
+        currentJob?.phase === PHASES.WAITING_FOR_OTP ? PHASES.WAITING_FOR_OTP : PHASES.OTP_REQUIRED;
       if (emit) {
-        await emit(jobId, PHASES.OTP_REQUIRED, uidaiError.message, "uidai_error", {
+        await emit(jobId, uidaiPhase, uidaiError.message, "uidai_error", {
           level: "warn",
           error: uidaiError,
           metadata: { retryCount: uidaiRetries, maxRetries: MAX_UIDAI_RETRIES },
@@ -1068,8 +1144,11 @@ async function handleAadhaarConsentAndGenerateOtp(page, otpSelectors, passwordSe
         const afterUidai = detectUidaiError(afterClick);
         if (afterUidai) {
           uidaiRetries += 1;
+          const currentJob = await Job.findOne({ jobId }).select("phase").lean();
+          const uidaiPhase =
+            currentJob?.phase === PHASES.WAITING_FOR_OTP ? PHASES.WAITING_FOR_OTP : PHASES.OTP_REQUIRED;
           if (emit) {
-            await emit(jobId, PHASES.OTP_REQUIRED, afterUidai.message, "uidai_error", {
+            await emit(jobId, uidaiPhase, afterUidai.message, "uidai_error", {
               level: "warn",
               error: afterUidai,
               metadata: { retryCount: uidaiRetries, maxRetries: MAX_UIDAI_RETRIES },
@@ -1277,9 +1356,6 @@ async function detectPortalError(page) {
     return { code: "PAN_NOT_REGISTERED", message: "PAN is not registered on the Income Tax portal" };
   }
   if (/uidai|absence of response from uidai|could not be completed in absence of response/.test(text)) {
-    if (isAadhaarOtpConsentContext(text)) {
-      return null;
-    }
     return {
       code: "UIDAI_UNAVAILABLE",
       message:
@@ -1299,12 +1375,6 @@ function detectUidaiError(text = "") {
     };
   }
   return null;
-}
-
-function isAadhaarOtpConsentContext(text = "") {
-  return /I\s+agree\s+to\s+validate\s+my\s+Aadhaar\s+Details|Generate\s+Aadhaar\s+OTP|OTP\s+on\s+mobile\s+number\s+registered\s+with\s+Aadhaar|One\s+time\s+password\s+\(OTP\)\s+will\s+be\s+sent\s+via\s+text\s+message/i.test(
-    text
-  );
 }
 
 async function hasVisibleOtpInput(page, otpSelectors) {
@@ -1642,12 +1712,17 @@ async function submitRecoveryDetailsAfterCaptcha(page, otpSelectors, passwordSel
           { level: "warn" }
         );
       } else {
+        const currentJob = await Job.findOne({ jobId }).select("phase").lean();
+        const progressPhase =
+          currentJob?.phase === PHASES.WAITING_FOR_OTP ? PHASES.WAITING_FOR_OTP : PHASES.OTP_REQUIRED;
         const snapshot = await debugPortalSnapshot(page, jobId, "recovery-progress");
         await emit(
           jobId,
-          PHASES.OTP_REQUIRED,
-          "Requesting OTP from portal — check browser if channel selection is needed",
-          "recovery_form_progress",
+          progressPhase,
+          progressPhase === PHASES.WAITING_FOR_OTP
+            ? "Waiting for operator OTP — portal request is already active"
+            : "Requesting OTP from portal — check browser if channel selection is needed",
+          progressPhase === PHASES.WAITING_FOR_OTP ? "waiting_for_otp" : "recovery_form_progress",
           {
             level: "info",
             metadata: { url: snapshot.url, pageHint: snapshot.snippet.slice(0, 200) },
@@ -1658,11 +1733,16 @@ async function submitRecoveryDetailsAfterCaptcha(page, otpSelectors, passwordSel
 
     if (takeCaptchaContinue()) {
       await markCaptchaCleared("Operator confirmed CAPTCHA solved");
+      const currentJob = await Job.findOne({ jobId }).select("phase").lean();
+      const continuePhase =
+        currentJob?.phase === PHASES.WAITING_FOR_OTP ? PHASES.WAITING_FOR_OTP : PHASES.OTP_REQUIRED;
       await emit(
         jobId,
-        PHASES.OTP_REQUIRED,
-        "Operator confirmed; submitting recovery form to request OTP",
-        "captcha_operator_continue",
+        continuePhase,
+        continuePhase === PHASES.WAITING_FOR_OTP
+          ? "Operator confirmed; OTP request already active"
+          : "Operator confirmed; submitting recovery form to request OTP",
+        continuePhase === PHASES.WAITING_FOR_OTP ? "waiting_for_otp" : "captcha_operator_continue",
         { level: "info" }
       );
       await selectOtpChannel(page, 2000);
@@ -1847,9 +1927,8 @@ async function runPlaywrightAutomation({
       }
 
       await fillOtp(page, otpVal, OTP_SELECTORS);
-      await page.waitForTimeout(3000);
-
-      if (await isPasswordResetPage(page, passwordSelector, OTP_SELECTORS)) {
+      const passwordReady = await waitForPasswordResetPage(page, passwordSelector, OTP_SELECTORS, 30000);
+      if (passwordReady) {
         await emit(
           jobId,
           PHASES.OTP_VERIFIED,
@@ -1858,6 +1937,8 @@ async function runPlaywrightAutomation({
         );
         break;
       }
+
+      await page.waitForTimeout(1000);
 
       const bodyTxt = await page.innerText("body").catch(() => "");
       if (bodyTxt.includes("Incorrect OTP") || bodyTxt.includes("Invalid OTP") || bodyTxt.includes("does not match")) {
@@ -1898,7 +1979,7 @@ async function runPlaywrightAutomation({
       );
     }
 
-    await ensureOtpVerifiedBeforePassword(jobId, emit);
+    await ensureOtpVerifiedBeforePassword(page, OTP_SELECTORS, passwordSelector, jobId, emit);
 
     const generatedPassword = generatePassword();
     const pwdInputs = page.locator(passwordSelector);
@@ -1929,18 +2010,17 @@ async function runPlaywrightAutomation({
   }
 }
 
-async function ensureOtpVerifiedBeforePassword(jobId, emit) {
+async function ensureOtpVerifiedBeforePassword(page, otpSelectors, passwordSelector, jobId, emit) {
   let job = await Job.findOne({ jobId }).select("phase").lean();
   if (!job) return;
 
+  if (!(await waitForPasswordResetPage(page, passwordSelector, otpSelectors, 30000))) {
+    return;
+  }
+
   if (job.phase === PHASES.CAPTCHA_REQUIRED || job.phase === PHASES.CAPTCHA_SOLVED) {
-    await emit(
-      jobId,
-      PHASES.OTP_REQUIRED,
-      "Portal advanced to password reset screen",
-      "otp_required"
-    );
-    job = await Job.findOne({ jobId }).select("phase").lean();
+    await emit(jobId, PHASES.OTP_VERIFIED, "OTP accepted by portal.", "otp_verified");
+    return;
   }
 
   if (job?.phase === PHASES.OTP_REQUIRED || job?.phase === PHASES.WAITING_FOR_OTP) {
